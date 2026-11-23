@@ -7,11 +7,12 @@ latency while tracking output quality.
 
 ## Status
 
-Day 2 of 28: project scaffold, hardware detection, typed config, structured
-logging, plus a working llama.cpp inference backend (Qwen2.5-0.5B-Instruct)
-and a hardware-gated vLLM backend scaffold. See [PROGRESS.md](PROGRESS.md)
-for detailed status and [ARCHITECTURE.md](ARCHITECTURE.md) for design
-decisions.
+Day 3 of 28: project scaffold, hardware detection, typed config, structured
+logging, a working llama.cpp inference backend (Qwen2.5-0.5B-Instruct) and a
+hardware-gated vLLM backend scaffold, plus a production-style FastAPI service
+(`/health`, `/models`, `/generate`, `/generate/stream`, `/metrics`) wrapping
+the backend over HTTP. See [PROGRESS.md](PROGRESS.md) for detailed status
+and [ARCHITECTURE.md](ARCHITECTURE.md) for design decisions.
 
 ## Requirements
 
@@ -65,7 +66,51 @@ python -m inference_optimizer generate "Name one primary color." \
 # vLLM is a scaffold on this machine (Windows / no confirmed CUDA host) —
 # this is expected to fail fast with a clear "unsupported hardware" error:
 python -m inference_optimizer backend-status --backend vllm
+
+# Start the FastAPI service (loads the real llama.cpp backend on startup).
+# Use a port different from the backend's internal port (default 8731) --
+# they would otherwise collide on the same machine.
+python -m inference_optimizer serve --port 8000
 ```
+
+### API examples
+
+With the server from `serve --port 8000` running:
+
+```bash
+# Health and model info
+curl http://127.0.0.1:8000/health
+curl http://127.0.0.1:8000/models
+
+# Non-streaming generation
+curl -X POST http://127.0.0.1:8000/generate \
+  -H "Content-Type: application/json" \
+  -d '{"prompt": "What is the capital of France?", "max_tokens": 40}'
+
+# Streaming generation (Server-Sent Events)
+curl -N -X POST http://127.0.0.1:8000/generate/stream \
+  -H "Content-Type: application/json" \
+  -d '{"prompt": "Name one primary color.", "max_tokens": 20}'
+
+# Prometheus-text metrics
+curl http://127.0.0.1:8000/metrics
+```
+
+`GenerateRequest` fields (all but `prompt` optional, override the model
+config defaults for that one request): `prompt`, `max_tokens`, `temperature`,
+`top_p`, `seed` (passed through to the backend when it supports it --
+llama.cpp's OpenAI-compatible server does), `timeout_seconds` (per-request
+override of `INFERENCE_OPTIMIZER_API_DEFAULT_REQUEST_TIMEOUT_SECONDS`).
+
+Every response carries an `X-Request-ID` header (echoed back if the caller
+sends one); it is also bound into structured log lines for that request and
+included in the JSON body of `/generate` responses and error payloads.
+
+**Deployment security assumption:** the API has no authentication and is
+meant for local/dev use only, directly on `127.0.0.1` or inside a trusted
+network boundary. Do not expose it on a public interface without adding an
+auth layer (API key, mTLS, or a reverse proxy that handles auth) in front of
+it first — nothing here checks who is calling.
 
 ## Development
 
@@ -83,7 +128,7 @@ Equivalent `make` targets exist in the `Makefile` for Unix/WSL users.
 ## Project Layout
 
 ```
-src/inference_optimizer/   application code (hardware, config, logging, backends, cli)
+src/inference_optimizer/   application code (hardware, config, logging, backends, api, cli)
 tests/unit/                 fast, mocked unit tests
 tests/integration/           real-subprocess/CLI tests, incl. opt-in model smoke test
 configs/models/               model config YAML (name, tokenizer, revision, quant, params)

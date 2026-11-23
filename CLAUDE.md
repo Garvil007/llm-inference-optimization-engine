@@ -30,10 +30,15 @@ that matter for every session.
   decisions, report exact test outcomes, list unresolved issues, update
   PROGRESS.md and ARCHITECTURE.md, suggest a commit message.
 
-## Current architecture (Day 2)
+## Current architecture (Day 3)
 
-`src/inference_optimizer/{hardware,config,logging,backends,cli}` — see
+`src/inference_optimizer/{hardware,config,logging,backends,api,cli}` — see
 ARCHITECTURE.md for the full module map and rationale. Active model:
 Qwen2.5-0.5B-Instruct GGUF (Q4_K_M), config at
 `configs/models/qwen2.5-0.5b-instruct.yaml`. llama.cpp backend works here;
 vLLM is a hardware-gated scaffold only (no Linux+CUDA host available).
+FastAPI service (`python -m inference_optimizer serve`) wraps the backend
+over HTTP: `/health`, `/models`, `/generate`, `/generate/stream`, `/metrics`.
+No auth — local/dev only. `llama-cpp-python` is pinned exactly to `0.3.2`
+(newer prebuilt wheels crash with an illegal-instruction error on this CPU
+— see PROGRESS.md Day 3).

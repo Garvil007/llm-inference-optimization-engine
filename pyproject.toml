@@ -28,7 +28,12 @@ dependencies = [
 #   pip install llama-cpp-python --prefer-binary \
 #     --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu
 serving = [
-    "llama-cpp-python>=0.3,<0.4",
+    # Pinned exact: the prebuilt CPU wheel for llama-cpp-python>=0.3.3 (through at
+    # least 0.3.38) crashes on this machine with OSError WinError -1073741795
+    # (STATUS_ILLEGAL_INSTRUCTION) inside llama_backend_init() -- found by actually
+    # running the real server this session. 0.3.2's wheel runs cleanly; re-verify
+    # before bumping this pin.
+    "llama-cpp-python==0.3.2",
     "uvicorn>=0.23,<1.0",
     "fastapi>=0.100,<1.0",
     "sse-starlette>=1.6.1,<3.0",
@@ -52,6 +57,9 @@ dev = [
     "ruff>=0.5,<0.6",
     "mypy>=1.10,<2.0",
     "types-PyYAML>=6.0,<7.0",
+    # fastapi itself (not uvicorn/llama-cpp-python) so the API test suite runs without
+    # the `serving` extra -- TestClient only needs fastapi + httpx (already a core dep).
+    "fastapi>=0.100,<1.0",
 ]
 
 dashboard = [

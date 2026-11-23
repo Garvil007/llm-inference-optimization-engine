@@ -129,6 +129,19 @@ async def _run_generate(
         await inference_backend.stop()
 
 
+@app.command("serve")
+def serve(
+    host: str = typer.Option("127.0.0.1", help="Host to bind the API server to."),
+    port: int = typer.Option(8000, help="Port to bind the API server to."),
+) -> None:
+    """Run the FastAPI inference service (uvicorn), blocking until interrupted."""
+    import uvicorn
+
+    from inference_optimizer.api import create_app
+
+    uvicorn.run(create_app(), host=host, port=port)
+
+
 def main() -> None:
     app()
 

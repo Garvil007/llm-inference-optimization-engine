@@ -186,6 +186,8 @@ class VLLMBackend(InferenceBackend):
             "max_tokens": params.get("max_tokens", defaults.max_tokens),
             "stream": True,
         }
+        if params.get("seed") is not None:
+            payload["seed"] = params["seed"]
         try:
             async with self._client.stream(
                 "POST", "/v1/chat/completions", json=payload

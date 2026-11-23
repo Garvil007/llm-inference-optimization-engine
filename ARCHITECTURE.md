@@ -140,6 +140,63 @@ parsing path (`data: {...}` chunks, `[DONE]` sentinel) that real traffic uses.
 The one real-subprocess path is `tests/integration/test_llama_cpp_smoke.py`,
 skipped by default and opt-in via `RUN_REAL_BACKEND_TESTS=1`.
 
+## Module map (Day 3 additions)
+
+```
+src/inference_optimizer/api/
+├── schemas.py       GenerateRequest, GenerateResponse, ModelInfo, HealthResponse, ErrorResponse
+├── config.py          ApiSettings (env prefix INFERENCE_OPTIMIZER_API_), get_api_settings()
+├── concurrency.py     ConcurrencyLimiter / AdmissionRejected -- bounded admission, no queueing
+├── metrics.py          Metrics -- hand-rolled Prometheus text exposition
+└── app.py               create_app(settings, backend) -- FastAPI factory, routes, middleware
+```
+
+## Key decisions (Day 3)
+
+**`create_app(settings, backend)` keeps the backend out of FastAPI's hands.**
+Production (`serve` CLI command) passes `backend=None` and the `lifespan`
+builds a real one via the Day 2 `create_backend`/`load_model_config`
+functions -- unchanged. Tests pass a fake `InferenceBackend` directly, so
+the API test suite (`tests/unit/test_api.py`, 15 tests) never spawns a real
+subprocess. `api/app.py` has zero `import` of `llama_cpp_backend` or
+`vllm_backend` by name; it only knows the `InferenceBackend` ABC.
+
+**Bounded concurrency admission, not a queue.** `ConcurrencyLimiter` is a
+plain counter guarded by `asyncio.Lock`, not `asyncio.Semaphore` -- asyncio's
+`Semaphore` has no non-blocking try-acquire, and a queued semaphore would let
+request latency grow unbounded under load instead of giving callers a fast,
+explicit 429. For the streaming route specifically, admission is acquired
+*before* `StreamingResponse` is constructed (not inside the generator):
+once ASGI streaming starts, status 200 is already committed, so an
+`AdmissionRejected` raised mid-generator could never surface as a 429.
+
+**Streaming timeout is per-chunk, not one `wait_for` around the whole
+generator.** `asyncio.wait_for(stream.__anext__(), timeout=remaining)` is
+called on every chunk against a shared wall-clock deadline, so a stream that
+keeps producing tokens past its total time budget is still cut off -- a
+single outer `wait_for` around the entire async-for loop would not time out
+a generator that's still actively yielding. Since HTTP status can't change
+after streaming starts, a timeout or backend error mid-stream is surfaced as
+one `data: {"error": ...}` SSE event, not an HTTP error code.
+
+**Metrics are hand-rolled, not `prometheus_client`.** Three counters/gauges
+(`requests_total`, `request_duration_seconds_{sum,count}`,
+`requests_in_flight`) don't justify a new dependency; `Metrics.render_prometheus()`
+emits the standard text exposition format directly so `/metrics` is
+Prometheus-scrapeable without the library.
+
+**Real bug found and fixed: llama-cpp-python's newer prebuilt wheel crashes
+on this CPU.** Verifying end-to-end against the real server (not just the
+mocked API tests) surfaced `OSError: [WinError -1073741795]`
+(`STATUS_ILLEGAL_INSTRUCTION`) inside `llama_backend_init()` with
+`llama-cpp-python` 0.3.38 (the version `>=0.3,<0.4` resolved to today) on
+this AMD Ryzen 7 5800H. `llama-cpp-python==0.3.2` from the same wheel index
+runs cleanly and served real completions and streams this session. Pinned
+exactly in `pyproject.toml`'s `serving` extra with a comment explaining why
+-- this is exactly the kind of thing that's only findable by actually
+running inference, not by any mocked test, per the project's "never claim
+inference works unless a real response was generated" rule.
+
 ## Not yet built
 
 Benchmarking, profiling, quantization experiments, evaluation harness,
