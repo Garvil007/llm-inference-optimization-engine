@@ -1,0 +1,39 @@
+{
+  "dataset_version": "v1",
+  "dataset_path": "data\\workloads\\prompts_v1.jsonl",
+  "tokenizer_repo_id": "Qwen/Qwen2.5-0.5B-Instruct",
+  "tokenizer_method": "tokenizer",
+  "generated_at": "2026-11-24T18:15:00.716408Z",
+  "seed": 0,
+  "record_count": 30,
+  "generation_settings": {
+    "tiers": [
+      [
+        128,
+        64
+      ],
+      [
+        512,
+        128
+      ],
+      [
+        2048,
+        256
+      ]
+    ],
+    "context_limit": 2048,
+    "safety_margin": 32,
+    "categories": [
+      "code_generation",
+      "long_context_qa",
+      "short_qa",
+      "structured_extraction",
+      "summarization"
+    ],
+    "variants_per_tier": 2
+  },
+  "source_file_hashes": {
+    "generator.py": "8c087cf4f974b9f4eaf18f44222225c632759c7fbe02e524277ef14e454cb14e",
+    "prompts_v1.jsonl": "94e3a91ef7855465fa87e8585558f87cdfb719dcf203760727fcc3f911d0f36c"
+  }
+}

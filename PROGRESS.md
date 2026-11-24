@@ -377,3 +377,90 @@ constraints file) is worth the complexity.
   measured and is explicitly documented as out of reach without backend-
   side per-token timestamps or one-SSE-event-per-token framing.
 - The `click`/`tokenizers` dependency tension noted above.
+
+## Day 5 — Reproducible workload generation framework
+
+**Built:**
+- `src/inference_optimizer/workload/`: `models.py` (`PromptRecord`,
+  `WorkloadManifest`), `dataset.py` (JSONL load/save), `generator.py`
+  (`generate_dataset()` — 5 categories x 3 tiers x 2 variants, tokenizer-aware
+  padding), `validator.py` (`validate_dataset()` — errors vs. warnings),
+  `sampler.py` (`sample_records()` — seeded, reproducible), `manifest.py`
+  (`build_manifest()`/`save_manifest()` — sha256 of generator + dataset).
+- `docs/workload.md` — categories/tiers, reproduction steps, clamping policy,
+  why no copyrighted text is used.
+- CLI: `workload-generate [--path] [--tokenizer-repo] [--config]
+  [--dataset-version] [--seed]`, `workload-validate [--path]`,
+  `workload-sample [--path] --count --seed [--category]... [--input-length]...`.
+  `--path` on all three accepts any JSONL — the "user-provided datasets"
+  option is just pointing `--path` elsewhere.
+- `data/workloads/prompts_v1.jsonl` (30 records) + `prompts_v1.manifest.json`
+  — version-controlled (unlike `results/`, which is gitignored run output).
+- `tests/unit/test_workload_{generator,validator,sampler,dataset,manifest}.py`
+  (30 tests total; generator tests use `WhitespaceApproxCounter` — offline,
+  deterministic — not a real tokenizer, to stay network-independent).
+
+**Design decisions:**
+- Prompts are `header + padding + footer`; padding only ever adds/removes
+  whole filler units (a coarse paragraph, then a fine sentence for precise
+  top-up) — the footer (the actual question/instruction/record) is never
+  touched, so padding can never corrupt the task itself.
+- The 2048-token input tier is clamped during generation to
+  `context_limit - output_target_tokens - safety_margin` (1760 for this
+  model), not the raw label — a literal 2048-token prompt would leave zero
+  room for any output in a 2048-token-context model. `input_length_target`
+  (label) and `input_tokens_measured` (real count) are kept as separate
+  `PromptRecord` fields specifically so this is never hidden, mirroring Day
+  4's target-vs-observed discipline for output tokens.
+- Token length is reused from Day 4's `TokenCounter` infrastructure
+  (`HFTokenizerCounter`/`WhitespaceApproxCounter`) rather than duplicating
+  tokenization logic — one `.count()` interface for both benchmarking and
+  workload generation.
+- Validation separates **errors** (duplicate ids, empty prompts, zero token
+  counts, exceeding the model's context budget) from **warnings** (measured
+  length far from target) — a user-provided dataset may legitimately miss
+  exact target lengths without being unusable.
+- Sampling uses its own seeded `random.Random` instance per call, never the
+  shared global `random` module, so sampling is reproducible independent of
+  what else in the process has consumed randomness.
+- All prompt content (headers, filler paragraphs, footers/questions) is
+  original text written for this project — no existing dataset, benchmark
+  suite, or licensed corpus is used, per the brief's explicit instruction to
+  avoid copyrighted/restricted datasets.
+
+**Real end-to-end verification (not simulated):** ran
+`workload-generate` against the real `Qwen/Qwen2.5-0.5B-Instruct` tokenizer:
+- 30 records written to `data/workloads/prompts_v1.jsonl`; `workload-validate`
+  reports **0 errors, 0 warnings** — the real tokenizer's word/token ratio
+  landed every record within tolerance (e.g. `short_qa-128-1` measured 126
+  tokens against a target of 128; `short_qa-512-1` measured 507 against 512).
+- All ten 2048-tier records measured 1752–1759 input tokens; combined with
+  their 256-token output target, every one sums to 2008–2015 — safely under
+  the model's 2048-token context limit (confirmed by inspecting the real
+  generated file, not assumed).
+- `workload-sample --count 3 --seed 7` run twice produced the identical
+  sequence of record ids both times (`summarization-2048-1`,
+  `short_qa-2048-1`, `code_generation-128-1`); `--category code_generation`
+  correctly restricted the sample pool.
+
+**Test/CLI results (measured, this session):**
+- `pytest tests/unit/test_workload_*.py`: 30/30 passed (one assertion
+  adjusted after discovering paragraph-granular padding legitimately
+  undershoots the target with a crude word-count counter — fixed by adding
+  a fine-grained filler sentence for top-up, which also improved real-world
+  accuracy, not just the test).
+- `pytest` (full suite): 99 passed, 1 skipped, same 3 pre-existing
+  `test_hardware_detector.py` failures as Days 3–4 (unrelated, untouched).
+- `ruff check src tests`: all checks passed.
+- `mypy src`: no issues found (37 source files).
+
+**Unresolved / deferred:**
+- The 3 pre-existing `test_hardware_detector.py` failures (still Day 1
+  scope).
+- Dataset reproducibility is pinned to a tokenizer *repo id*, not a
+  specific HF revision/commit SHA — a future change to that repo's
+  `tokenizer.json` could shift measured lengths on a later regeneration;
+  documented as a caveat in docs/workload.md rather than solved today.
+- The workload dataset is not yet wired into the Day 4 benchmark CLI (which
+  still takes a single repeated prompt) — that integration is left for a
+  future day, consistent with "implement only today's scope."

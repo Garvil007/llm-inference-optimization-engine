@@ -17,6 +17,7 @@ from inference_optimizer.hardware import detect_hardware
 from inference_optimizer.logging import configure_logging, get_logger
 
 _DEFAULT_MODEL_CONFIG = Path("configs/models/qwen2.5-0.5b-instruct.yaml")
+_DEFAULT_WORKLOAD_PATH = Path("data/workloads/prompts_v1.jsonl")
 
 app = typer.Typer(
     name="inference-optimizer",
@@ -186,6 +187,134 @@ async def _run_benchmark(
 
     typer.echo(json.dumps(result.summary.model_dump(), indent=2))
     typer.echo(f"Raw observations + summary written to {out_path}")
+
+
+@app.command("workload-generate")
+def workload_generate(
+    path: Path = typer.Option(_DEFAULT_WORKLOAD_PATH, help="Output JSONL dataset path."),  # noqa: B008
+    tokenizer_repo: str | None = typer.Option(
+        None, help="HF repo id for tokenizer-aware lengths (defaults to model config's tokenizer)."
+    ),
+    config: Path = typer.Option(  # noqa: B008 - typer's standard idiom
+        _DEFAULT_MODEL_CONFIG, help="Model config YAML path (tokenizer + context_limit source)."
+    ),
+    dataset_version: str = typer.Option("v1", help="Version label recorded in the manifest."),
+    seed: int = typer.Option(0, help="Recorded in the manifest as the default sampling seed."),
+) -> None:
+    """Generate the versioned prompt dataset (JSONL) plus its provenance manifest."""
+    from inference_optimizer.benchmark import HFTokenizerCounter
+    from inference_optimizer.workload import (
+        build_manifest,
+        generate_dataset,
+        save_dataset,
+        save_manifest,
+        validate_dataset,
+    )
+    from inference_optimizer.workload.generator import (
+        DEFAULT_SAFETY_MARGIN,
+        DEFAULT_TIERS,
+        GENERATOR_SOURCE_PATH,
+    )
+
+    model_config = load_model_config(config)
+    repo_id = tokenizer_repo or model_config.tokenizer
+    tokenizer = HFTokenizerCounter(repo_id)
+    context_limit = model_config.context_limit
+
+    records = generate_dataset(tokenizer, context_limit=context_limit)
+    errors, warnings = validate_dataset(records, context_limit=context_limit)
+    for warning in warnings:
+        typer.echo(f"warning: {warning}", err=True)
+    if errors:
+        for error in errors:
+            typer.echo(f"error: {error}", err=True)
+        raise typer.Exit(code=1)
+
+    save_dataset(path, records)
+    manifest = build_manifest(
+        dataset_version=dataset_version,
+        dataset_path=path,
+        tokenizer_repo_id=repo_id,
+        tokenizer_method=tokenizer.method,
+        seed=seed,
+        record_count=len(records),
+        generation_settings={
+            "tiers": DEFAULT_TIERS,
+            "context_limit": context_limit,
+            "safety_margin": DEFAULT_SAFETY_MARGIN,
+            "categories": sorted({record.category for record in records}),
+            "variants_per_tier": 2,
+        },
+        generator_source_path=GENERATOR_SOURCE_PATH,
+    )
+    manifest_path = path.with_suffix(".manifest.json")
+    save_manifest(manifest_path, manifest)
+
+    typer.echo(f"Wrote {len(records)} records to {path}")
+    typer.echo(f"Wrote manifest to {manifest_path}")
+
+
+@app.command("workload-validate")
+def workload_validate(
+    path: Path = typer.Option(_DEFAULT_WORKLOAD_PATH, help="JSONL dataset path to validate."),  # noqa: B008
+) -> None:
+    """Validate a prompt dataset (built-in or user-provided)."""
+    from inference_optimizer.workload import load_dataset, validate_dataset
+
+    try:
+        records = load_dataset(path)
+    except InferenceOptimizerError as exc:
+        typer.echo(f"Failed to load dataset: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    errors, warnings = validate_dataset(records)
+    for warning in warnings:
+        typer.echo(f"warning: {warning}")
+    for error in errors:
+        typer.echo(f"error: {error}", err=True)
+
+    if errors:
+        typer.echo(
+            f"{len(errors)} error(s), {len(warnings)} warning(s) across {len(records)} records."
+        )
+        raise typer.Exit(code=1)
+    typer.echo(f"OK: {len(records)} records valid, {len(warnings)} warning(s).")
+
+
+@app.command("workload-sample")
+def workload_sample(
+    path: Path = typer.Option(  # noqa: B008
+        _DEFAULT_WORKLOAD_PATH, help="JSONL dataset path (built-in or user-provided)."
+    ),
+    count: int = typer.Option(..., help="Number of records to sample."),
+    seed: int = typer.Option(  # noqa: B008
+        ..., help="Random seed; same seed + inputs always yields the same sample."
+    ),
+    category: list[str] = typer.Option(  # noqa: B008
+        [], help="Restrict to these categories (repeatable)."
+    ),
+    input_length: list[int] = typer.Option(  # noqa: B008
+        [], help="Restrict to these input-length tiers (repeatable)."
+    ),
+) -> None:
+    """Reproducibly sample records from a dataset and print them as JSONL."""
+    from inference_optimizer.workload import load_dataset, sample_records
+
+    try:
+        records = load_dataset(path)
+    except InferenceOptimizerError as exc:
+        typer.echo(f"Failed to load dataset: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    sampled = sample_records(
+        records,
+        count=count,
+        seed=seed,
+        categories=category or None,  # type: ignore[arg-type]
+        input_length_targets=input_length or None,  # type: ignore[arg-type]
+    )
+    for record in sampled:
+        typer.echo(record.model_dump_json())
 
 
 @app.command("serve")

@@ -7,14 +7,16 @@ latency while tracking output quality.
 
 ## Status
 
-Day 4 of 28: project scaffold, hardware detection, typed config, structured
+Day 5 of 28: project scaffold, hardware detection, typed config, structured
 logging, a working llama.cpp inference backend (Qwen2.5-0.5B-Instruct) and a
 hardware-gated vLLM backend scaffold, a production-style FastAPI service
 (`/health`, `/models`, `/generate`, `/generate/stream`, `/metrics`) wrapping
-the backend over HTTP, and a benchmark client that measures TTFT/latency/TPOT/
-throughput against the streaming API (see [docs/benchmarking.md](docs/benchmarking.md)
-for metric definitions and aggregation policies). See [PROGRESS.md](PROGRESS.md)
-for detailed status and [ARCHITECTURE.md](ARCHITECTURE.md) for design decisions.
+the backend over HTTP, a benchmark client that measures TTFT/latency/TPOT/
+throughput against the streaming API (see [docs/benchmarking.md](docs/benchmarking.md)),
+and a reproducible workload dataset generator (5 categories x 3 length tiers,
+tokenizer-aware, seeded sampling -- see [docs/workload.md](docs/workload.md)).
+See [PROGRESS.md](PROGRESS.md) for detailed status and
+[ARCHITECTURE.md](ARCHITECTURE.md) for design decisions.
 
 ## Requirements
 
@@ -133,6 +135,28 @@ See [docs/benchmarking.md](docs/benchmarking.md) for exactly what each metric
 means and the policies for warmup exclusion, failed requests, and missing
 token counts.
 
+### Workload dataset
+
+A versioned, reproducible prompt dataset lives at `data/workloads/prompts_v1.jsonl`
+(5 categories x 3 input-length tiers x 2 variants = 30 records), with its
+provenance manifest at `data/workloads/prompts_v1.manifest.json`.
+
+```bash
+# Regenerate it (deterministic given the same tokenizer version):
+python -m inference_optimizer workload-generate --path data/workloads/prompts_v1.jsonl
+
+# Validate it (or any JSONL dataset of your own):
+python -m inference_optimizer workload-validate --path data/workloads/prompts_v1.jsonl
+
+# Reproducibly sample from it:
+python -m inference_optimizer workload-sample \
+  --path data/workloads/prompts_v1.jsonl --count 10 --seed 42
+```
+
+See [docs/workload.md](docs/workload.md) for category/tier definitions, the
+model-context-limit clamping policy for the 2048-token tier, and exact
+reproduction steps.
+
 ## Development
 
 Cross-platform task runner (works without `make` on Windows):
@@ -149,15 +173,16 @@ Equivalent `make` targets exist in the `Makefile` for Unix/WSL users.
 ## Project Layout
 
 ```
-src/inference_optimizer/   application code (hardware, config, logging, backends, api, cli)
+src/inference_optimizer/   application code (hardware, config, logging, backends, api, benchmark, workload, cli)
 tests/unit/                 fast, mocked unit tests
 tests/integration/           real-subprocess/CLI tests, incl. opt-in model smoke test
 configs/models/               model config YAML (name, tokenizer, revision, quant, params)
+data/workloads/                versioned prompt dataset (JSONL) + manifest, version-controlled
 scripts/                     one-off operational scripts
 benchmarks/                   benchmark suite (added later)
 results/                     persisted experiment output (gitignored)
 dashboard/                   Streamlit dashboard (added later)
-docs/                        design docs and reports
+docs/                        design docs and reports (benchmarking.md, workload.md)
 ```
 
 ## License

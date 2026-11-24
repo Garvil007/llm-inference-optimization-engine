@@ -257,7 +257,69 @@ after installing the `benchmark` extra; this is a real, currently
 unresolved tension between the `benchmark` extra's dependency tree and the
 CLI's click pin, noted in PROGRESS.md rather than hidden.
 
+## Module map (Day 5 additions)
+
+```
+src/inference_optimizer/workload/
+├── models.py       PromptRecord, WorkloadManifest
+├── dataset.py         JSONL load/save
+├── generator.py         generate_dataset() -- categories x tiers x variants,
+│                          tokenizer-aware padding
+├── validator.py          validate_dataset() -- errors vs. warnings
+├── sampler.py             sample_records() -- seeded, reproducible
+└── manifest.py             build_manifest()/save_manifest() -- sha256 provenance
+
+data/workloads/prompts_v1.jsonl + .manifest.json   version-controlled dataset deliverable
+docs/workload.md   categories/tiers, reproduction steps, clamping policy
+```
+
+## Key decisions (Day 5)
+
+**Padding never touches the footer.** Every prompt is `header + padding +
+footer`; padding only adds/removes whole filler units (a coarse paragraph,
+then a fine sentence for precise top-up). The footer -- the actual
+question/instruction/record -- is built once and never trimmed, so no
+amount of length-targeting can corrupt the task itself.
+
+**The 2048-token input tier is clamped to the model's real context budget,
+not generated at the raw label.** `effective_target = min(input_label,
+context_limit - output_target - safety_margin)`, which is 1760 for this
+model's 2048-token context with a 256-token output target. Generating a
+literal 2048-token prompt would leave zero room for any output. `models.py`
+keeps `input_length_target` (the categorical label from the brief) and
+`input_tokens_measured` (the real tokenizer count) as two separate fields
+specifically so this clamping is never hidden -- the same
+target-vs-observed discipline Day 4 applies to output tokens.
+
+**Token counting is reused from Day 4, not duplicated.** `generator.py`
+takes any `inference_optimizer.benchmark.token_counter.TokenCounter` (the
+same protocol the benchmark client uses) -- `HFTokenizerCounter` for real
+generation, `WhitespaceApproxCounter` for offline/deterministic tests. One
+counting abstraction serves both benchmarking and workload generation.
+
+**Validation separates errors from warnings.** Structural/safety problems
+(duplicate ids, empty prompts, zero token counts, exceeding the model's
+context budget) are errors; a measured length far from its target is a
+warning -- because a user-provided dataset (the brief's "option to use
+user-provided datasets") may legitimately not hit exact target lengths
+without being unusable for benchmarking.
+
+**Sampling uses a private seeded `random.Random`, never the global
+`random` module.** `sample_records(records, count, seed, ...)` is a pure
+function of its inputs -- the same call always returns the same sequence,
+independent of what else in the process has consumed randomness, verified
+this session by running the real CLI command twice with the same seed and
+getting identical output.
+
+**All prompt content is original.** Headers, filler paragraphs, and
+footers (questions/instructions/records) were written for this project --
+no existing dataset, benchmark suite, or licensed corpus is used anywhere
+in `generator.py`, per the brief's explicit instruction to avoid
+copyrighted or restricted datasets.
+
 ## Not yet built
 
-Benchmarking, profiling, quantization experiments, evaluation harness,
-dashboard, Docker/CI — scoped to later days per the 28-day plan.
+Profiling, quantization experiments, evaluation harness, dashboard,
+Docker/CI, concurrent/load benchmarking, and wiring the workload dataset
+into the Day 4 benchmark CLI (which still takes a single repeated prompt)
+— scoped to later days per the 28-day plan.

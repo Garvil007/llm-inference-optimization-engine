@@ -30,9 +30,9 @@ that matter for every session.
   decisions, report exact test outcomes, list unresolved issues, update
   PROGRESS.md and ARCHITECTURE.md, suggest a commit message.
 
-## Current architecture (Day 4)
+## Current architecture (Day 5)
 
-`src/inference_optimizer/{hardware,config,logging,backends,api,benchmark,cli}`
+`src/inference_optimizer/{hardware,config,logging,backends,api,benchmark,workload,cli}`
 — see ARCHITECTURE.md for the full module map and rationale. Active model:
 Qwen2.5-0.5B-Instruct GGUF (Q4_K_M), config at
 `configs/models/qwen2.5-0.5b-instruct.yaml`. llama.cpp backend works here;
@@ -46,4 +46,8 @@ benchmark`) measures TTFT/latency/TPOT/throughput against the streaming
 API — see docs/benchmarking.md for metric definitions/policies. Installing
 the `benchmark` extra (`tokenizers`) can upgrade `click` past typer's pin;
 re-pin `click<8.2,>=8.1` afterward if `hardware-info`/other flag-using
-commands start crashing.
+commands start crashing. Versioned workload dataset at
+`data/workloads/prompts_v1.jsonl` (+ `.manifest.json`), built via
+`workload-generate`/validated via `workload-validate`/sampled via
+`workload-sample` — see docs/workload.md. Not yet wired into the `benchmark`
+CLI command (still takes one repeated prompt).
