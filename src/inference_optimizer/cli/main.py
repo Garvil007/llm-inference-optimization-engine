@@ -129,6 +129,65 @@ async def _run_generate(
         await inference_backend.stop()
 
 
+@app.command("benchmark")
+def benchmark(
+    prompt: str = typer.Argument(..., help="Prompt to send repeatedly."),
+    base_url: str = typer.Option("http://127.0.0.1:8000", help="Running API server base URL."),
+    iterations: int = typer.Option(10, min=1, help="Total requests to send."),
+    warmup: int = typer.Option(2, min=0, help="Leading requests excluded from aggregates."),
+    tokenizer_repo: str | None = typer.Option(
+        None,
+        help="HF repo id for real token counts (defaults to the model config's tokenizer).",
+    ),
+    config: Path = typer.Option(  # noqa: B008 - typer's standard idiom
+        _DEFAULT_MODEL_CONFIG, help="Model config YAML path (for the tokenizer default)."
+    ),
+    max_tokens: int = typer.Option(0, help="Override max_tokens (0 = model config default)."),
+) -> None:
+    """Run a sequential benchmark against a running API server and save raw
+    observations + aggregate metrics to results/.
+    """
+    asyncio.run(
+        _run_benchmark(prompt, base_url, iterations, warmup, tokenizer_repo, config, max_tokens)
+    )
+
+
+async def _run_benchmark(
+    prompt: str,
+    base_url: str,
+    iterations: int,
+    warmup: int,
+    tokenizer_repo: str | None,
+    config_path: Path,
+    max_tokens: int,
+) -> None:
+    from inference_optimizer.benchmark import BenchmarkClient, HFTokenizerCounter
+    from inference_optimizer.config import get_settings
+
+    repo_id = tokenizer_repo or load_model_config(config_path).tokenizer
+    params: dict[str, object] = {"max_tokens": max_tokens} if max_tokens > 0 else {}
+
+    client = BenchmarkClient(base_url=base_url, token_counter=HFTokenizerCounter(repo_id))
+    try:
+        result = await client.run_many([prompt] * iterations, warmup_count=warmup, **params)
+    except InferenceOptimizerError as exc:
+        logger.error("benchmark_failed", error=str(exc))
+        typer.echo(f"Benchmark failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    finally:
+        await client.aclose()
+
+    settings = get_settings()
+    settings.results_dir.mkdir(parents=True, exist_ok=True)
+    from datetime import UTC, datetime
+
+    out_path = settings.results_dir / f"benchmark_{datetime.now(UTC):%Y%m%dT%H%M%SZ}.json"
+    out_path.write_text(result.model_dump_json(indent=2))
+
+    typer.echo(json.dumps(result.summary.model_dump(), indent=2))
+    typer.echo(f"Raw observations + summary written to {out_path}")
+
+
 @app.command("serve")
 def serve(
     host: str = typer.Option("127.0.0.1", help="Host to bind the API server to."),

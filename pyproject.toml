@@ -49,6 +49,13 @@ gpu = [
     "vllm>=0.5,<0.7",
 ]
 
+# Real per-model token counts for the benchmark client (HFTokenizerCounter). Optional:
+# without it, HFTokenizerCounter degrades to method="unavailable" rather than crashing,
+# and FixedTokenCounter/WhitespaceApproxCounter work with no extra install at all.
+benchmark = [
+    "tokenizers>=0.19,<1.0",
+]
+
 dev = [
     "pytest>=8.2,<9.0",
     "pytest-cov>=5.0,<6.0",

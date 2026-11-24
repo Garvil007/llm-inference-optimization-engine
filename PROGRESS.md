@@ -274,3 +274,106 @@ real server, not by the mocked unit tests):**
   coverage-measured here (not run with `--cov` this session), but every
   branch is exercised by at least one of the 15 API tests plus the real
   end-to-end run above.
+
+## Day 4 — Core inference performance measurement system
+
+**Built:**
+- `src/inference_optimizer/benchmark/`: `models.py` (`RequestObservation`,
+  `MetricStats`, `BenchmarkSummary`, `BenchmarkResult`), `token_counter.py`
+  (`TokenCounter` protocol, `HFTokenizerCounter`, `FixedTokenCounter`,
+  `WhitespaceApproxCounter`), `aggregate.py` (`summarize()`, percentile/
+  stddev math, aggregation policies), `client.py` (`BenchmarkClient`,
+  clock-injectable `_consume_sse_stream`).
+- `docs/benchmarking.md` — full writeup of TTFT/TPOT/inter-token-latency/
+  throughput/end-to-end-latency definitions and the warmup/failure/missing-
+  token/percentile policies (required deliverable, not just a code comment).
+- CLI: `python -m inference_optimizer benchmark PROMPT [--base-url]
+  [--iterations] [--warmup] [--tokenizer-repo] [--config] [--max-tokens]` —
+  runs sequentially against a running API server, prints the aggregate
+  summary, writes raw observations + summary to
+  `results/benchmark_<timestamp>.json`.
+- New `benchmark` extra (`tokenizers>=0.19,<1.0`) in `pyproject.toml` for
+  real per-model token counts; optional, `HFTokenizerCounter` degrades to
+  `method="unavailable"` without it rather than crashing.
+- `tests/unit/test_token_counter.py` (8 tests), `test_benchmark_aggregate.py`
+  (9 tests, hand-computed percentile/stddev values), `test_benchmark_client.py`
+  (12 tests, fully deterministic via an injected fake clock + `httpx.MockTransport`
+  — no real sleeps anywhere).
+
+**Design decisions:**
+- Only 3 `time.perf_counter()` samples per request (start, first non-empty
+  content, stream end) — never one per SSE chunk, since a chunk is not a
+  token and per-chunk timing would imply a false granularity. TPOT is
+  derived arithmetically from these 3 samples plus the token count, not
+  from per-token timestamps (this system does not measure true inter-token
+  latency — documented explicitly in docs/benchmarking.md, including why
+  TPOT is a different statistic from it).
+- Token counting prefers the real model tokenizer (`HFTokenizerCounter`,
+  method `"tokenizer"`) over counting SSE chunks or words, per the literal
+  "never assume one SSE event or streaming chunk equals one token"
+  instruction. `FixedTokenCounter` exists purely so tests can assert exact
+  TPOT/throughput arithmetic without a real tokenizer dependency.
+- `_consume_sse_stream(lines, clock)` is a free function taking a plain
+  `AsyncIterator[str]` and an injectable clock callable, independent of
+  httpx — this is what makes `test_benchmark_client.py` fully deterministic
+  (a fake clock supplies exact timestamps; no `asyncio.sleep` anywhere in
+  the test suite) while the real `BenchmarkClient.run_one()` wires in
+  `response.aiter_lines()` and `time.perf_counter` unchanged.
+- Aggregation policies (warmup exclusion, failed-request exclusion,
+  per-metric missing-data handling, linear-interpolation percentiles,
+  sample stdev) are stated as an explicit module docstring in
+  `aggregate.py` and mirrored in docs/benchmarking.md, per the "define
+  clear policies" instruction — not left to be inferred from the code.
+- Sequential requests only (no concurrency) — Day 4's brief is measurement
+  correctness, not load generation; concurrent/sustained-load benchmarking
+  is left for a later day, consistent with "no speculative abstraction."
+
+**Real end-to-end verification (not simulated):** started the real API
+server (`serve --port 8000`) against the actual Qwen2.5-0.5B-Instruct GGUF,
+installed the `tokenizers` package, and ran:
+```
+python -m inference_optimizer benchmark "Name one primary color." \
+  --base-url http://127.0.0.1:8000 --iterations 8 --warmup 2 --max-tokens 20
+```
+Real measured results (6 measured requests after 2 warmup, 0 failures,
+`token_count_method: "tokenizer"` on every observation — confirmed the
+actual Qwen2.5-0.5B-Instruct tokenizer was downloaded and used, not an
+estimate):
+- TTFT (ms): p50 23.93, p95 24.65, p99 24.74, mean 24.00, stddev 0.50
+- Latency (ms): p50 133.49, p95 308.57, p99 354.43, mean 172.34, stddev 94.83
+- TPOT (ms): p50 21.77, p95 22.27, p99 22.35, mean 21.26, stddev 1.61
+- Throughput (tok/s): p50 45.20, p95 52.36, p99 54.20, mean 46.53, stddev 4.02
+
+Raw observations + this summary written to
+`results/benchmark_20261124T172233Z.json` (gitignored, kept locally).
+Server shut down cleanly afterward (confirmed `GET /health` refused).
+
+**Bug found and fixed during verification:** installing the `tokenizers`
+package pulled in `huggingface-hub`, which upgraded `click` to 8.5.1 —
+reopening the exact Day 1 bug (typer's `--flag/--no-flag` options crash on
+`click>=8.2`). Fixed by re-pinning `click<8.2,>=8.1` after installing
+`tokenizers`; confirmed `hardware-info` still works. This is an inherent
+tension between `benchmark`'s dependency tree and the `click` pin — anyone
+installing the `benchmark` extra should re-check `pip show click` afterward
+until a cleaner fix (e.g. vendoring just the tokenizer load, or a stricter
+constraints file) is worth the complexity.
+
+**Test/CLI results (measured, this session):**
+- `pytest tests/unit/test_token_counter.py tests/unit/test_benchmark_aggregate.py tests/unit/test_benchmark_client.py`:
+  25/25 passed.
+- `pytest` (full suite): 69 passed, 1 skipped (opt-in real-backend test),
+  same **3 pre-existing failures** in `test_hardware_detector.py` as Day 3
+  (unrelated environment issue, not touched again this session).
+- `ruff check src tests`: all checks passed.
+- `mypy src`: no issues found (30 source files).
+
+**Unresolved / deferred:**
+- The 3 pre-existing `test_hardware_detector.py` failures (still Day 1
+  scope, still out of today's scope).
+- No concurrent/load benchmarking yet — sequential only, by design this
+  session; throughput under concurrent load is a different measurement
+  than the per-request throughput reported here.
+- Inter-token latency (the actual per-token-gap distribution) is not
+  measured and is explicitly documented as out of reach without backend-
+  side per-token timestamps or one-SSE-event-per-token framing.
+- The `click`/`tokenizers` dependency tension noted above.

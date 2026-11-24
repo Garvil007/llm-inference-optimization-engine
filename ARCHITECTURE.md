@@ -197,6 +197,66 @@ exactly in `pyproject.toml`'s `serving` extra with a comment explaining why
 running inference, not by any mocked test, per the project's "never claim
 inference works unless a real response was generated" rule.
 
+## Module map (Day 4 additions)
+
+```
+src/inference_optimizer/benchmark/
+├── models.py          RequestObservation, MetricStats, BenchmarkSummary, BenchmarkResult
+├── token_counter.py     TokenCounter protocol, HFTokenizerCounter, FixedTokenCounter,
+│                          WhitespaceApproxCounter
+├── aggregate.py          summarize() -- percentile/stddev math + aggregation policies
+└── client.py              BenchmarkClient, clock-injectable _consume_sse_stream
+
+docs/benchmarking.md   metric definitions (TTFT/TPOT/inter-token latency/throughput/
+                         end-to-end latency) and aggregation policies
+```
+
+## Key decisions (Day 4)
+
+**Exactly 3 clock samples per request, never one per SSE chunk.** A
+streaming chunk is not a token -- llama.cpp/vLLM's deltas are arbitrary text
+fragments. `_consume_sse_stream` samples `time.perf_counter()` only at
+request start, first non-empty content, and stream end. TPOT is derived
+arithmetically from those 3 samples plus a token count
+(`(latency_ms - ttft_ms) / (token_count - 1)`), not from per-chunk
+timestamps -- this system explicitly does not measure true inter-token
+latency (the per-token-gap distribution), and docs/benchmarking.md says so
+rather than letting TPOT be mistaken for it.
+
+**Token counting prefers the real model tokenizer over chunk/word
+counting.** `HFTokenizerCounter` loads the actual model's tokenizer (HF
+`tokenizers` library, lazy, degrades to `method="unavailable"` on any
+failure rather than raising) and counts real token IDs on the concatenated
+output text. `FixedTokenCounter`/`WhitespaceApproxCounter` exist for tests
+and as an explicit fallback, respectively -- every `RequestObservation`
+carries which method actually ran, so an estimate is never silently
+presented as a measurement.
+
+**The SSE-parsing core is clock-injectable and httpx-independent.**
+`_consume_sse_stream(lines: AsyncIterator[str], clock: Callable[[], float])`
+takes a plain async iterator, not an httpx response -- `BenchmarkClient`
+wires in `response.aiter_lines()` and `time.perf_counter` for real runs, and
+tests inject a fake clock (a predetermined sequence of values) plus a
+canned line sequence, making every timing assertion in
+`tests/unit/test_benchmark_client.py` exact and deterministic with zero
+real `asyncio.sleep` calls anywhere in the suite.
+
+**Aggregation policies are explicit, not implicit in the math.**
+`aggregate.py`'s module docstring states the warmup-exclusion, failed-
+request, missing-token-count, percentile (linear interpolation, numpy's
+default method), and stddev (sample, ddof=1) policies in full, mirrored in
+docs/benchmarking.md -- per the brief's explicit "define clear policies"
+requirement.
+
+**Real bug found and fixed: installing `tokenizers` reopened the Day 1
+click/typer bug.** `pip install tokenizers` pulled in `huggingface-hub`,
+which requires `click>=8.4.2`, silently upgrading past the `<8.2` pin typer
+needs (same `TypeError: Secondary flag is not valid for non-boolean flag`
+failure mode as Day 1). Fixed by re-pinning `click<8.2,>=8.1` immediately
+after installing the `benchmark` extra; this is a real, currently
+unresolved tension between the `benchmark` extra's dependency tree and the
+CLI's click pin, noted in PROGRESS.md rather than hidden.
+
 ## Not yet built
 
 Benchmarking, profiling, quantization experiments, evaluation harness,

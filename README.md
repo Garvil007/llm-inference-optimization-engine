@@ -7,12 +7,14 @@ latency while tracking output quality.
 
 ## Status
 
-Day 3 of 28: project scaffold, hardware detection, typed config, structured
+Day 4 of 28: project scaffold, hardware detection, typed config, structured
 logging, a working llama.cpp inference backend (Qwen2.5-0.5B-Instruct) and a
-hardware-gated vLLM backend scaffold, plus a production-style FastAPI service
+hardware-gated vLLM backend scaffold, a production-style FastAPI service
 (`/health`, `/models`, `/generate`, `/generate/stream`, `/metrics`) wrapping
-the backend over HTTP. See [PROGRESS.md](PROGRESS.md) for detailed status
-and [ARCHITECTURE.md](ARCHITECTURE.md) for design decisions.
+the backend over HTTP, and a benchmark client that measures TTFT/latency/TPOT/
+throughput against the streaming API (see [docs/benchmarking.md](docs/benchmarking.md)
+for metric definitions and aggregation policies). See [PROGRESS.md](PROGRESS.md)
+for detailed status and [ARCHITECTURE.md](ARCHITECTURE.md) for design decisions.
 
 ## Requirements
 
@@ -111,6 +113,25 @@ meant for local/dev use only, directly on `127.0.0.1` or inside a trusted
 network boundary. Do not expose it on a public interface without adding an
 auth layer (API key, mTLS, or a reverse proxy that handles auth) in front of
 it first — nothing here checks who is calling.
+
+### Benchmark
+
+With the API server running (as above), measure real performance against it:
+
+```bash
+# Optional: real per-model token counts instead of the approximate fallback
+pip install -e ".[benchmark]"
+
+python -m inference_optimizer benchmark "Name one primary color." \
+  --base-url http://127.0.0.1:8000 --iterations 10 --warmup 2 --max-tokens 20
+```
+
+Prints the aggregate summary (p50/p95/p99/mean/stddev for TTFT, end-to-end
+latency, TPOT, and throughput, plus failure rate) and writes both the raw
+per-request observations and that summary to `results/benchmark_<timestamp>.json`.
+See [docs/benchmarking.md](docs/benchmarking.md) for exactly what each metric
+means and the policies for warmup exclusion, failed requests, and missing
+token counts.
 
 ## Development
 
