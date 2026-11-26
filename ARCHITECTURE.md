@@ -317,9 +317,71 @@ no existing dataset, benchmark suite, or licensed corpus is used anywhere
 in `generator.py`, per the brief's explicit instruction to avoid
 copyrighted or restricted datasets.
 
+## Module map (Day 6 additions)
+
+`src/inference_optimizer/baseline/`:
+- `models.py` — `RunMetadata`, `SoftwareVersions`, `MemorySample`,
+  `RepeatResult`, `BaselineReport`.
+- `config.py` — `BaselineConfig` (pydantic, YAML-loaded via
+  `load_baseline_config`), the schema behind `configs/baseline.yaml`.
+- `metadata.py` — `collect_run_metadata`: git commit hash, installed
+  package versions, full `HardwareReport`, model/backend config snapshots.
+- `resources.py` — `sample_memory`: process RSS (`psutil`) + GPU memory
+  used (`pynvml`), both degrading to `None`/`"unavailable"` on failure.
+- `runner.py` — `run_baseline`: the orchestration itself (readiness,
+  warmup, fixed-workload repeats, JSONL/JSON/CSV output).
+
+## Key decisions (Day 6)
+
+**Drives the `InferenceBackend` directly, not through the Day 3 HTTP API.**
+A baseline run's job is to answer "does this actually work end-to-end and
+how fast," so it shouldn't need a second process (`serve`) already running.
+`_run_one_against_backend` in `runner.py` reimplements the same
+three-clock-sample policy as `benchmark/client.py`'s `_consume_sse_stream`
+(start / first non-empty chunk / completion) but over the backend's own
+`AsyncIterator[str]` chunks directly -- genuinely simpler than Day 4's
+version (no SSE line/JSON parsing needed), so this is deliberately not
+sharing code with `_consume_sse_stream` rather than forcing a coupling
+between the two contexts.
+
+**"Fixed workload" = sample once, reuse every repeat.** `sample_records()`
+is called a single time before the repeat loop; the same prompts, in the
+same order, feed every one of the `repeats` passes. This isolates what
+varies between repeats to the backend's own run-to-run variance, not the
+input -- the thing a baseline is supposed to characterize.
+
+**Unavailable backend writes nothing.** If `backend.start()` raises or
+`health_check()` reports unhealthy, `run_baseline` returns immediately with
+`BaselineReport.status="unavailable"` and the real exception text as
+`unavailable_reason` -- before `output_dir` is even created. No
+observation/aggregate file exists for a run that never actually measured
+anything, so a later reader can't mistake "the run failed" for "the run
+measured near-zero latency."
+
+**Reuses Day 4's `summarize()`/`RequestObservation`/`BenchmarkSummary`
+unmodified.** The per-request measurement contract and aggregation policies
+(warmup exclusion, failure handling, missing-token-count handling,
+percentile method, stdev) don't change just because requests now come from
+a direct backend call instead of an HTTP stream -- same functions, called
+with a different data source.
+
+**GPU memory is a whole-device reading, documented as such.** `pynvml`'s
+`nvmlDeviceGetMemoryInfo` reports total device memory in use, not this
+process's share. Confirmed on the real run (docs/baseline.md): since the
+llama.cpp backend here is CPU-only, the sampled GPU numbers reflect
+unrelated GPU activity on the machine, not the backend's own consumption --
+reported as "GPU memory in use on this machine" rather than mislabeled as
+the backend's footprint.
+
+**`token_counter`/`backend_factory` are optional constructor parameters on
+`run_baseline`**, mirroring `BenchmarkClient`'s injectable `http_client` --
+lets tests exercise the full orchestration (readiness/warmup/repeats/file
+writing) against a `FakeBackend` and `FixedTokenCounter`, with no real
+subprocess, model, or tokenizer download.
+
 ## Not yet built
 
 Profiling, quantization experiments, evaluation harness, dashboard,
-Docker/CI, concurrent/load benchmarking, and wiring the workload dataset
-into the Day 4 benchmark CLI (which still takes a single repeated prompt)
-— scoped to later days per the 28-day plan.
+Docker/CI, concurrent/load benchmarking, config recommendation, and wiring
+the workload dataset into the Day 4 benchmark CLI (which still takes a
+single repeated prompt) — scoped to later days per the 28-day plan.

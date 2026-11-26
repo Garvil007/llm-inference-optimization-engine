@@ -464,3 +464,98 @@ constraints file) is worth the complexity.
 - The workload dataset is not yet wired into the Day 4 benchmark CLI (which
   still takes a single repeated prompt) — that integration is left for a
   future day, consistent with "implement only today's scope."
+
+## Day 6 — End-to-end baseline benchmark
+
+**Built:**
+- `src/inference_optimizer/baseline/` — new module:
+  - `models.py`: `RunMetadata`, `SoftwareVersions`, `MemorySample`,
+    `RepeatResult`, `BaselineReport`.
+  - `config.py`: `BaselineConfig` (pydantic, YAML-loaded) + `load_baseline_config`.
+  - `metadata.py`: `collect_run_metadata` — run id, git commit hash (`git
+    rev-parse HEAD`, degrades to `None` + reason), installed package
+    versions (`importlib.metadata`, `None` if not installed), full
+    `HardwareReport` (Day 1), model/backend config snapshots.
+  - `resources.py`: `sample_memory` — process RSS via `psutil`, GPU memory
+    used via `pynvml` (device 0), both degrading to `None`/`"unavailable"`
+    on any failure.
+  - `runner.py`: `run_baseline` — verifies backend readiness
+    (`start()`+`health_check()`), discards `warmup_count` requests, samples
+    the Day 5 workload **once** (fixed across repeats), runs `repeats`
+    sequential passes (concurrency=1) driving the `InferenceBackend`
+    directly (no HTTP layer), reuses Day 4's `summarize()` unmodified per
+    repeat, and writes JSONL (raw observations) + JSON (full report) + CSV
+    (per-repeat summary) to `output_dir`. Accepts optional `token_counter`/
+    `backend_factory` injection points for testing.
+- `configs/baseline.yaml` — default run config.
+- CLI: `python -m inference_optimizer baseline --config configs/baseline.yaml`
+  (new command; kept separate from Day 4's `benchmark`, which has an
+  incompatible single-prompt/running-server contract — see docs/baseline.md
+  naming note).
+- `docs/baseline.md` — full writeup: readiness/warmup/repeat policy, metrics,
+  provenance fields, the GPU-memory-is-whole-device-not-process caveat
+  (confirmed by the real run below, since this backend is CPU-only), and the
+  unavailable-backend path.
+- Tests: `tests/unit/test_baseline_config.py` (4),
+  `tests/unit/test_baseline_resources.py` (4),
+  `tests/unit/test_baseline_metadata.py` (5),
+  `tests/unit/test_baseline_runner.py` (5) — all against a `FakeBackend`
+  double and `FixedTokenCounter`, no real subprocess/model/network call.
+
+**Design decisions:**
+- Drives `InferenceBackend` directly rather than through the Day 3 HTTP API:
+  a baseline run needs nothing already running, only a model file (and, for
+  llama.cpp, a CPU) — simpler failure mode for "verify readiness first."
+- "Fixed workload" means `sample_records()` is called once before the repeat
+  loop and the exact same prompts/order are reused every repeat — only the
+  backend's own run-to-run variance differs, not the input.
+- Backend-unavailable short-circuits before any output file is written:
+  `BaselineReport.status="unavailable"` with the real exception as
+  `unavailable_reason`, so a failed run can never be mistaken for a zero- or
+  near-zero-latency successful one.
+- `token_counter`/`backend_factory` are optional constructor-style injection
+  points on `run_baseline` (mirrors `BenchmarkClient`'s `http_client` param)
+  so tests exercise the full orchestration without a real tokenizer download
+  or subprocess.
+
+**Real end-to-end verification (measured, this session):**
+- Ran `python -m inference_optimizer baseline --config configs/baseline.yaml`
+  against the real llama.cpp backend (Qwen2.5-0.5B-Instruct GGUF) with the
+  real HF tokenizer: 6 sampled prompts x 3 repeats = 18 requests, all
+  succeeded (`failure_rate: 0.0` every repeat).
+- Measured p50 latency: repeat 0 = 3829.3 ms, repeat 1 = 5163.1 ms, repeat 2
+  = 5980.5 ms (p95: 5239.3 / 8665.8 / 15170.8 ms). TTFT p50: 805.6 / 1019.4 /
+  1338.9 ms. TPOT p50: 32.8 / 38.6 / 48.5 ms. Throughput p50: 19.0 / 11.0 /
+  10.8 tok/s. req/s: 0.268 / 0.206 / 0.138.
+- Latency grew across repeats; measured available RAM at run time was only
+  2.41 GB free of 16.54 GB total — read as CPU/memory contention on this
+  shared dev machine, not a runner bug; documented in docs/baseline.md as a
+  noisy single-machine baseline, not a clean reference number.
+- GPU memory sampled via `pynvml` (382.93 / 298.41 / 243.25 MB across the
+  run) — confirmed this is whole-device usage, not attributable to this
+  (CPU-only) backend; documented as a caveat rather than presented as the
+  backend's own consumption.
+- Git commit hash captured correctly: `c73c2ea7579fba717c964166c78620571e749440`.
+- Output files confirmed on disk: `results/baseline/baseline_20261125T235104Z_
+  {observations.jsonl (18 lines), report.json, summary.csv (3 rows)}` — not
+  committed (gitignored, like all of `results/`).
+
+**Test/CLI results (measured, this session):**
+- `pytest tests/unit/test_baseline_*.py`: 18/18 passed.
+- `pytest` (full suite): 117 passed, 1 skipped, same 3 pre-existing
+  `test_hardware_detector.py` failures as every prior day (unrelated,
+  untouched).
+- `ruff check src tests`: all checks passed.
+- `mypy src`: no issues found (43 source files).
+
+**Unresolved / deferred:**
+- The 3 pre-existing `test_hardware_detector.py` failures (still Day 1
+  scope).
+- GPU memory sampling is whole-device, not process-scoped — acceptable for
+  now since this backend is CPU-only, but would need a different approach
+  (e.g. diffing against a GPU-idle baseline, or a CUDA-capable backend that
+  reports its own allocator stats) to attribute memory to the backend
+  specifically on a GPU-serving setup.
+- No config-recommendation or optimization logic yet — this is explicitly a
+  measurement-only baseline, consistent with "establish measurement
+  correctness first" from Day 4 and "implement only today's scope."

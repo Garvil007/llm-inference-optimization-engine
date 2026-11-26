@@ -30,9 +30,9 @@ that matter for every session.
   decisions, report exact test outcomes, list unresolved issues, update
   PROGRESS.md and ARCHITECTURE.md, suggest a commit message.
 
-## Current architecture (Day 5)
+## Current architecture (Day 6)
 
-`src/inference_optimizer/{hardware,config,logging,backends,api,benchmark,workload,cli}`
+`src/inference_optimizer/{hardware,config,logging,backends,api,benchmark,workload,baseline,cli}`
 — see ARCHITECTURE.md for the full module map and rationale. Active model:
 Qwen2.5-0.5B-Instruct GGUF (Q4_K_M), config at
 `configs/models/qwen2.5-0.5b-instruct.yaml`. llama.cpp backend works here;
@@ -49,5 +49,12 @@ re-pin `click<8.2,>=8.1` afterward if `hardware-info`/other flag-using
 commands start crashing. Versioned workload dataset at
 `data/workloads/prompts_v1.jsonl` (+ `.manifest.json`), built via
 `workload-generate`/validated via `workload-validate`/sampled via
-`workload-sample` — see docs/workload.md. Not yet wired into the `benchmark`
-CLI command (still takes one repeated prompt).
+`workload-sample` — see docs/workload.md. Day 6 adds a config-driven
+end-to-end baseline runner (`python -m inference_optimizer baseline
+--config configs/baseline.yaml`) that drives the backend directly (no
+`serve` needed), with full provenance (git commit, package versions,
+hardware) and raw JSONL + aggregate JSON/CSV output — see docs/baseline.md,
+including the GPU-memory-is-whole-device caveat. Not yet wired into the
+Day 4 `benchmark` CLI command (still takes one repeated prompt against a
+running server) — kept as a separate command, see docs/baseline.md's
+naming note.

@@ -7,14 +7,17 @@ latency while tracking output quality.
 
 ## Status
 
-Day 5 of 28: project scaffold, hardware detection, typed config, structured
+Day 6 of 28: project scaffold, hardware detection, typed config, structured
 logging, a working llama.cpp inference backend (Qwen2.5-0.5B-Instruct) and a
 hardware-gated vLLM backend scaffold, a production-style FastAPI service
 (`/health`, `/models`, `/generate`, `/generate/stream`, `/metrics`) wrapping
 the backend over HTTP, a benchmark client that measures TTFT/latency/TPOT/
 throughput against the streaming API (see [docs/benchmarking.md](docs/benchmarking.md)),
-and a reproducible workload dataset generator (5 categories x 3 length tiers,
-tokenizer-aware, seeded sampling -- see [docs/workload.md](docs/workload.md)).
+a reproducible workload dataset generator (5 categories x 3 length tiers,
+tokenizer-aware, seeded sampling -- see [docs/workload.md](docs/workload.md)),
+and a config-driven baseline benchmark runner that drives the backend
+directly end-to-end (readiness check, warmup, fixed workload, repeated runs,
+full provenance) -- see [docs/baseline.md](docs/baseline.md).
 See [PROGRESS.md](PROGRESS.md) for detailed status and
 [ARCHITECTURE.md](ARCHITECTURE.md) for design decisions.
 
@@ -157,6 +160,24 @@ See [docs/workload.md](docs/workload.md) for category/tier definitions, the
 model-context-limit clamping policy for the 2048-token tier, and exact
 reproduction steps.
 
+### Baseline benchmark
+
+A config-driven end-to-end baseline run (no API server required -- drives the
+backend directly):
+
+```bash
+python -m inference_optimizer baseline --config configs/baseline.yaml
+```
+
+Verifies backend readiness, warms up, runs a fixed seeded workload sample
+sequentially (concurrency=1) across several repeats, and writes raw
+observations (JSONL) plus aggregate metrics (JSON + CSV) with full run
+provenance (git commit, software versions, hardware, model/backend config,
+process + GPU memory) to `results/baseline/`. See
+[docs/baseline.md](docs/baseline.md) for the metric definitions, the
+GPU-memory-is-whole-device caveat, and a real run's numbers from this
+machine.
+
 ## Development
 
 Cross-platform task runner (works without `make` on Windows):
@@ -173,7 +194,7 @@ Equivalent `make` targets exist in the `Makefile` for Unix/WSL users.
 ## Project Layout
 
 ```
-src/inference_optimizer/   application code (hardware, config, logging, backends, api, benchmark, workload, cli)
+src/inference_optimizer/   application code (hardware, config, logging, backends, api, benchmark, workload, baseline, cli)
 tests/unit/                 fast, mocked unit tests
 tests/integration/           real-subprocess/CLI tests, incl. opt-in model smoke test
 configs/models/               model config YAML (name, tokenizer, revision, quant, params)
@@ -182,7 +203,7 @@ scripts/                     one-off operational scripts
 benchmarks/                   benchmark suite (added later)
 results/                     persisted experiment output (gitignored)
 dashboard/                   Streamlit dashboard (added later)
-docs/                        design docs and reports (benchmarking.md, workload.md)
+docs/                        design docs and reports (benchmarking.md, workload.md, baseline.md)
 ```
 
 ## License

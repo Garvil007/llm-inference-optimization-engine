@@ -317,6 +317,47 @@ def workload_sample(
         typer.echo(record.model_dump_json())
 
 
+@app.command("baseline")
+def baseline(
+    config: Path = typer.Option(Path("configs/baseline.yaml"), help="Baseline config YAML."),  # noqa: B008
+) -> None:
+    """Run the Day 6 baseline benchmark end-to-end (readiness check, warmup,
+    fixed workload at concurrency=1, repeated), writing raw JSONL + aggregate
+    JSON/CSV to the config's output_dir. See docs/baseline.md.
+    """
+    asyncio.run(_run_baseline_command(config))
+
+
+async def _run_baseline_command(config_path: Path) -> None:
+    from inference_optimizer.baseline import load_baseline_config, run_baseline
+
+    try:
+        baseline_config = load_baseline_config(config_path)
+    except InferenceOptimizerError as exc:
+        typer.echo(f"Failed to load baseline config: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    report = await run_baseline(baseline_config)
+
+    if report.status == "unavailable":
+        typer.echo(f"Baseline run unavailable: {report.unavailable_reason}", err=True)
+        raise typer.Exit(code=1)
+
+    typer.echo(
+        f"Baseline run {report.run_metadata.run_id} completed "
+        f"({len(report.repeats)} repeat(s)); results in {baseline_config.output_dir}"
+    )
+    for repeat in report.repeats:
+        summary = repeat.summary
+        typer.echo(
+            f"repeat {repeat.repeat_index}: latency p50={summary.latency_ms.p50}ms "
+            f"p95={summary.latency_ms.p95}ms p99={summary.latency_ms.p99}ms "
+            f"ttft p50={summary.ttft_ms.p50}ms tpot p50={summary.tpot_ms.p50}ms "
+            f"throughput p50={summary.throughput_tokens_per_second.p50}tok/s "
+            f"req/s={repeat.requests_per_second} failure_rate={summary.failure_rate}"
+        )
+
+
 @app.command("serve")
 def serve(
     host: str = typer.Option("127.0.0.1", help="Host to bind the API server to."),

@@ -1,0 +1,22 @@
+# Day 6 baseline benchmark config. Fields match BaselineConfig
+# (src/inference_optimizer/baseline/config.py); see docs/baseline.md.
+
+model_config_path: configs/models/qwen2.5-0.5b-instruct.yaml
+backend_type: llama-cpp
+
+# A fixed subset of the Day 5 workload dataset, sampled once (seeded) and
+# reused unchanged across every repeat -- "fixed workload" per the brief.
+workload_path: data/workloads/prompts_v1.jsonl
+sample_count: 6
+sample_seed: 0
+categories: null
+input_length_targets: null
+
+warmup_count: 2
+repeats: 3
+
+# null = use the model config's own tokenizer/max_tokens.
+tokenizer_repo: null
+max_tokens_override: null
+
+output_dir: results/baseline
