@@ -358,6 +358,40 @@ async def _run_baseline_command(config_path: Path) -> None:
         )
 
 
+@app.command("report")
+def report(
+    baseline_report: Path = typer.Option(  # noqa: B008 - typer's standard idiom
+        ..., help="Path to a baseline_*_report.json file (from `baseline`)."
+    ),
+    observations: Path | None = typer.Option(  # noqa: B008
+        None,
+        help=(
+            "Path to the matching baseline_*_observations.jsonl file "
+            "(required unless the report's status is 'unavailable')."
+        ),
+    ),
+    output_dir: Path = typer.Option(  # noqa: B008
+        Path("reports/baseline"), help="Where to write report.md/report.html/plots."
+    ),
+) -> None:
+    """Parse a Day 6 baseline run's artifacts and generate a validated Markdown +
+    HTML report with distribution plots, repeat variability, and flags. See
+    docs/reporting.md.
+    """
+    from inference_optimizer.report import generate_report
+
+    try:
+        report_data = generate_report(baseline_report, observations, output_dir)
+    except InferenceOptimizerError as exc:
+        logger.error("report_generation_failed", error=str(exc))
+        typer.echo(f"Report generation failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    typer.echo(f"Report written to {output_dir / 'report.md'} and {output_dir / 'report.html'}")
+    for flag in report_data.flags:
+        typer.echo(f"[{flag.level.upper()}] {flag.code}: {flag.message}")
+
+
 @app.command("serve")
 def serve(
     host: str = typer.Option("127.0.0.1", help="Host to bind the API server to."),

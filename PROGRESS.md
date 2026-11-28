@@ -559,3 +559,93 @@ constraints file) is worth the complexity.
 - No config-recommendation or optimization logic yet — this is explicitly a
   measurement-only baseline, consistent with "establish measurement
   correctness first" from Day 4 and "implement only today's scope."
+
+## Day 7 — Week 1 reporting, validation, and risk review
+
+**Built:**
+- `src/inference_optimizer/report/`: a report pipeline over Day 6's baseline
+  artifacts — `parser.py` (reads the real JSON report + JSONL raw
+  observations), `validate.py` (recomputes every aggregate from raw data via
+  Day 4's `summarize()`, unmodified, and diffs against the stored values),
+  `variability.py` (repeat-to-repeat mean/stddev/coefficient-of-variation per
+  metric, `None` not `0` with < 2 repeats), `flags.py` (`run_unavailable`,
+  `incomplete_repeats`, `requests_failed`, `aggregate_mismatch`,
+  `low_available_memory`, `high_repeat_variability`,
+  `gpu_memory_not_process_attributed`), `comparison.py` (internal-consistency
+  checks only — explicitly no external SLA exists yet to compare against),
+  `plots.py` (matplotlib Agg histograms for TTFT/latency/throughput, real
+  data only outside tests), `content.py` + `markdown_renderer.py` +
+  `html_renderer.py` (shared table data, two output formats), and
+  `generator.py` (orchestrates all of the above, writes `report.md` +
+  `report.html` + plot PNGs).
+- New `report` CLI command: `python -m inference_optimizer report
+  --baseline-report <path> --observations <path> --output-dir <dir>`.
+- New `report` optional dependency group (`matplotlib>=3.8,<4.0`) in
+  pyproject.toml.
+- `docs/reporting.md`: metric definitions (pointers to Day 4/6 docs), flag
+  definitions, the "no external baseline yet" comparison caveat, and
+  measurement limitations.
+- `docs/week1_report.md`: the Week 1 technical report — architecture
+  overview, the real baseline run's findings (transcribed from the generated
+  `reports/week1/report.md`), and a review of what's working/untested/risks
+  for Week 2.
+- `reports/week1/{report.md, report.html, ttft_distribution.png,
+  latency_distribution.png, throughput_distribution.png}`: generated (not
+  hand-written) from the real Day 6 artifacts
+  (`results/baseline/baseline_20261125T235104Z_*`) via `python -m
+  inference_optimizer report`.
+
+**Design decisions:**
+- Validation reuses Day 4's `summarize()` unmodified rather than
+  reimplementing aggregation — a report pipeline that recomputed metrics
+  differently than the runner that produced them would defeat the point of
+  validating.
+- Flags only annotate; they never mutate the stored numbers. A run with
+  `requests_failed` or `aggregate_mismatch` still renders its full report —
+  the flag is the signal to distrust it, not a reason to hide it.
+- "Comparison against expectations" is implemented as internal-consistency
+  checks (TTFT p50 <= latency p50) plus an explicit `no_external_baseline`
+  note, not a fabricated target number — there is no documented SLA for this
+  model+hardware combination yet, and inventing one would violate the
+  project's no-fabrication rule.
+- Markdown and HTML renderers share table-building logic (`content.py`) so
+  the two formats can't drift apart in content, only in layout.
+- Plots skip a metric entirely (rather than drawing a 1-point "distribution")
+  when fewer than 2 real successful observations have that field.
+
+**Real end-to-end verification (measured, this session):**
+- Ran `python -m inference_optimizer report` against the real Day 6
+  artifacts. Output: 3 flags surfaced on the real run —
+  `low_available_memory` (2.41 GB free), `high_repeat_variability`
+  (throughput p50 CV = 0.34, over the 0.3 threshold), and
+  `gpu_memory_not_process_attributed` (informational). All 3 repeats'
+  validation passed (`OK`) — the stored aggregates are exactly reproducible
+  from the raw JSONL, confirming no drift between what the baseline runner
+  computed and what's on disk.
+- Confirmed on disk: `reports/week1/report.md` (58 lines, correct hardware/
+  model/metrics tables, correct git commit hash) + `report.html` + 3 real
+  PNG plots, all non-empty.
+
+**Test/CLI results (measured, this session):**
+- New tests: `test_report_parser.py` (4), `test_report_analysis.py` (10),
+  `test_report_plots.py` (3, fixture data explicitly labeled `_FIXTURE_*` in
+  the module docstring and constant names), `test_report_render.py` (4),
+  `tests/integration/test_week1_pipeline.py` (3 — workload generation
+  through report creation, offline via FakeBackend/WhitespaceApproxCounter).
+  24/24 new tests passed.
+- `pytest` (full suite): 141 passed, 1 skipped, same 3 pre-existing
+  `test_hardware_detector.py` failures as every prior day (unrelated,
+  untouched).
+- `ruff check src tests`: all checks passed.
+- `mypy src`: no issues found (55 source files).
+
+**Unresolved / deferred (see docs/week1_report.md's full review):**
+- The 3 pre-existing `test_hardware_detector.py` failures (still Day 1
+  scope).
+- No controlled/isolated-machine run exists yet to separate "this model's
+  real latency" from "this shared dev machine's contention at the time" —
+  the `low_available_memory` and `high_repeat_variability` flags on the real
+  run document the open question rather than resolving it.
+- vLLM remains entirely unexercised end-to-end (no Linux+CUDA host); no
+  concurrency > 1 has been measured anywhere yet; no quantization/batching
+  comparison exists — all explicitly Week 2+ scope.

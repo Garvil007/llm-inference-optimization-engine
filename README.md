@@ -7,7 +7,7 @@ latency while tracking output quality.
 
 ## Status
 
-Day 6 of 28: project scaffold, hardware detection, typed config, structured
+Day 7 of 28: project scaffold, hardware detection, typed config, structured
 logging, a working llama.cpp inference backend (Qwen2.5-0.5B-Instruct) and a
 hardware-gated vLLM backend scaffold, a production-style FastAPI service
 (`/health`, `/models`, `/generate`, `/generate/stream`, `/metrics`) wrapping
@@ -15,9 +15,12 @@ the backend over HTTP, a benchmark client that measures TTFT/latency/TPOT/
 throughput against the streaming API (see [docs/benchmarking.md](docs/benchmarking.md)),
 a reproducible workload dataset generator (5 categories x 3 length tiers,
 tokenizer-aware, seeded sampling -- see [docs/workload.md](docs/workload.md)),
-and a config-driven baseline benchmark runner that drives the backend
+a config-driven baseline benchmark runner that drives the backend
 directly end-to-end (readiness check, warmup, fixed workload, repeated runs,
-full provenance) -- see [docs/baseline.md](docs/baseline.md).
+full provenance) -- see [docs/baseline.md](docs/baseline.md)), and a report
+pipeline that validates/flags/plots those baseline results into Markdown +
+HTML -- see [docs/reporting.md](docs/reporting.md) and the
+[Week 1 technical report](docs/week1_report.md).
 See [PROGRESS.md](PROGRESS.md) for detailed status and
 [ARCHITECTURE.md](ARCHITECTURE.md) for design decisions.
 
@@ -178,6 +181,26 @@ process + GPU memory) to `results/baseline/`. See
 GPU-memory-is-whole-device caveat, and a real run's numbers from this
 machine.
 
+### Report generation
+
+A Day 7 pipeline that parses a baseline run's real artifacts, validates
+aggregates against raw observations, flags incomplete/failed/non-comparable
+runs, and renders a Markdown + HTML report with real-measurement
+distribution plots:
+
+```bash
+pip install -e ".[report]"   # matplotlib
+python -m inference_optimizer report \
+  --baseline-report results/baseline/baseline_<timestamp>_report.json \
+  --observations results/baseline/baseline_<timestamp>_observations.jsonl \
+  --output-dir reports/baseline
+```
+
+See [docs/reporting.md](docs/reporting.md) for flag/metric definitions and
+measurement limitations, and [docs/week1_report.md](docs/week1_report.md)
+for the Week 1 technical report generated from this machine's real Day 6
+baseline run.
+
 ## Development
 
 Cross-platform task runner (works without `make` on Windows):
@@ -194,16 +217,17 @@ Equivalent `make` targets exist in the `Makefile` for Unix/WSL users.
 ## Project Layout
 
 ```
-src/inference_optimizer/   application code (hardware, config, logging, backends, api, benchmark, workload, baseline, cli)
+src/inference_optimizer/   application code (hardware, config, logging, backends, api, benchmark, workload, baseline, report, cli)
 tests/unit/                 fast, mocked unit tests
-tests/integration/           real-subprocess/CLI tests, incl. opt-in model smoke test
+tests/integration/           real-subprocess/CLI tests, incl. opt-in model smoke test, Week 1 pipeline test
 configs/models/               model config YAML (name, tokenizer, revision, quant, params)
 data/workloads/                versioned prompt dataset (JSONL) + manifest, version-controlled
 scripts/                     one-off operational scripts
 benchmarks/                   benchmark suite (added later)
 results/                     persisted experiment output (gitignored)
+reports/                     generated Markdown/HTML reports + plots (e.g. reports/week1/)
 dashboard/                   Streamlit dashboard (added later)
-docs/                        design docs and reports (benchmarking.md, workload.md, baseline.md)
+docs/                        design docs and reports (benchmarking.md, workload.md, baseline.md, reporting.md, week1_report.md)
 ```
 
 ## License

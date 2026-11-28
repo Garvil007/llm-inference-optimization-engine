@@ -30,9 +30,9 @@ that matter for every session.
   decisions, report exact test outcomes, list unresolved issues, update
   PROGRESS.md and ARCHITECTURE.md, suggest a commit message.
 
-## Current architecture (Day 6)
+## Current architecture (Day 7)
 
-`src/inference_optimizer/{hardware,config,logging,backends,api,benchmark,workload,baseline,cli}`
+`src/inference_optimizer/{hardware,config,logging,backends,api,benchmark,workload,baseline,report,cli}`
 — see ARCHITECTURE.md for the full module map and rationale. Active model:
 Qwen2.5-0.5B-Instruct GGUF (Q4_K_M), config at
 `configs/models/qwen2.5-0.5b-instruct.yaml`. llama.cpp backend works here;
@@ -49,7 +49,7 @@ re-pin `click<8.2,>=8.1` afterward if `hardware-info`/other flag-using
 commands start crashing. Versioned workload dataset at
 `data/workloads/prompts_v1.jsonl` (+ `.manifest.json`), built via
 `workload-generate`/validated via `workload-validate`/sampled via
-`workload-sample` — see docs/workload.md. Day 6 adds a config-driven
+`workload-sample` — see docs/workload.md. Day 6 added a config-driven
 end-to-end baseline runner (`python -m inference_optimizer baseline
 --config configs/baseline.yaml`) that drives the backend directly (no
 `serve` needed), with full provenance (git commit, package versions,
@@ -57,4 +57,11 @@ hardware) and raw JSONL + aggregate JSON/CSV output — see docs/baseline.md,
 including the GPU-memory-is-whole-device caveat. Not yet wired into the
 Day 4 `benchmark` CLI command (still takes one repeated prompt against a
 running server) — kept as a separate command, see docs/baseline.md's
-naming note.
+naming note. Day 7 adds a report pipeline (`python -m inference_optimizer
+report --baseline-report <path> --observations <path> --output-dir <dir>`,
+needs the `report` extra for matplotlib) that parses Day 6 artifacts,
+validates stored aggregates against raw observations, computes
+repeat-to-repeat variability, flags incomplete/failed/non-comparable runs,
+and renders Markdown + HTML with distribution plots — see docs/reporting.md
+and docs/week1_report.md (the Week 1 technical report, generated from the
+real Day 6 run at `reports/week1/`).

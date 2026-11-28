@@ -379,6 +379,63 @@ lets tests exercise the full orchestration (readiness/warmup/repeats/file
 writing) against a `FakeBackend` and `FixedTokenCounter`, with no real
 subprocess, model, or tokenizer download.
 
+## Module map (Day 7 additions)
+
+`src/inference_optimizer/report/`:
+- `models.py` — `RawObservationRecord`, `ValidationResult`,
+  `VariabilityStat`, `RunFlag`, `ComparisonNote`, `ReportData`.
+- `parser.py` — `load_baseline_report`/`load_raw_observations`: reads real
+  Day 6 artifacts back into typed objects.
+- `validate.py` — `validate_aggregates`: recomputes `BenchmarkSummary` from
+  raw observations via Day 4's `summarize()` and diffs against the stored
+  aggregate.
+- `variability.py` — `compute_variability`: repeat-to-repeat mean/stddev/
+  coefficient-of-variation per metric.
+- `flags.py` — `compute_flags`: incomplete/failed/mismatched/contended/
+  non-comparable quality flags.
+- `comparison.py` — `build_comparisons`: internal-consistency checks only
+  (no external SLA exists yet).
+- `plots.py` — `generate_distribution_plots`: matplotlib Agg histograms.
+- `content.py` — shared table-row builders for both renderers.
+- `markdown_renderer.py` / `html_renderer.py` — `render_markdown`/
+  `render_html`.
+- `generator.py` — `generate_report`: orchestrates parse → validate →
+  variability → flags → comparisons → plots → render.
+
+## Key decisions (Day 7)
+
+**Validation reuses Day 4's `summarize()` unmodified**, the same reuse
+discipline as Day 6 — a report that recomputed aggregates with different
+logic than the runner that produced them would validate against its own
+assumptions, not the actual pipeline.
+
+**Flags annotate, never mutate.** `compute_flags` never changes a stored
+number; a run with `requests_failed` or `aggregate_mismatch` still renders a
+full report with that flag attached, so the reader sees both the data and
+the reason to distrust it.
+
+**"Comparison against expectations" is internal-consistency only.** There is
+no documented SLA or vendor-published expected-performance number for this
+model+hardware combination — this week produced the *first* baseline, so
+`comparison.py` checks only that measured numbers are mutually consistent
+(TTFT p50 <= latency p50) and explicitly notes `no_external_baseline` rather
+than fabricating a target to compare against.
+
+**Markdown/HTML renderers share table-building logic (`content.py`)** so the
+two output formats can't drift apart in content, only in layout — adding a
+field means editing one function, not two renderers independently.
+
+**Plots are skipped, not degraded, below 2 data points.** A single-point
+"distribution" would misrepresent spread that doesn't exist; `plots.py`
+simply omits that metric from `plot_paths` rather than drawing a misleading
+chart.
+
+**Fixture data for plot tests is explicitly labeled.** `test_report_plots.py`
+names its synthetic values `_FIXTURE_*` and documents them as fixture data
+in the module docstring — the only place in this codebase a plot is ever
+drawn from invented numbers, and it's never confused with a real
+measurement in any generated report.
+
 ## Not yet built
 
 Profiling, quantization experiments, evaluation harness, dashboard,
